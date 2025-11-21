@@ -1,6 +1,8 @@
-transformers @ git+https://github.com/huggingface/transformers.git@a1afecaeb0fb0fc4d80142044b5d1815155ffdcf
+# transformers @ git+https://github.com/huggingface/transformers.git@a1afecaeb0fb0fc4d80142044b5d1815155ffdcf
+transformers
 sam3 @ git+https://github.com/Guereak/sam3.git
 accelerate==1.11.0
+tokenizers
 huggingface_hub==1.1.5
 torch
 torchvision==0.24.1
