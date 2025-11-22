@@ -1,7 +1,7 @@
 import numpy as np
 from pathlib import Path
 from PIL import Image
-import os
+import os, argparse
 
 from src.utils.image import find_matching_label_file, white_pixel_percentage
 
@@ -113,7 +113,7 @@ def crop_dataset(dataset_path, train_subdir="train", labels_subdir="train_labels
                 'y': coord[1]
             })
         
-        print(f"Processed {train_file.name}: {len(train_patches)} patches")
+    # print(f"Processed {train_file.name}: {len(train_patches)} patches")
     
     return {
         'train_patches': all_train_patches,
@@ -292,3 +292,92 @@ def remove_blank_patches(
             Image.fromarray(label_img).save(Path(output_data_path) / labels_subdir / f"{base_name}.png")
 
     print(f"Kept: {count / len(train_patches) * 100:.2f}% of patches.")
+
+
+def run_pipeline(
+    input_dir,
+    output_dir,
+    filtered_dir,
+    train_subdir="train",
+    labels_subdir="train_labels",
+    patch_size=256,
+    overlap=True,
+    train_max_threshold=5.0,
+    label_min_threshold=2.0,
+):
+    """
+    Run the full preprocessing pipeline: extract patches then filter blank ones.
+
+    Args:
+        input_dir: Path to raw dataset directory
+        output_dir: Path to output extracted patches
+        filtered_dir: Path to output filtered patches
+        train_subdir: Name of training images subdirectory
+        labels_subdir: Name of labels subdirectory
+        patch_size: Size of square patches
+        overlap: Whether patches should overlap
+        train_max_threshold: Max percentage of white pixels in train image
+        label_min_threshold: Min percentage of white pixels in label image
+
+    Returns:
+        Dictionary with results from crop_dataset
+    """
+    os.makedirs(output_dir, exist_ok=True)
+
+    print("Extracting patches from dataset...")
+    result = crop_dataset(
+        input_dir,
+        train_subdir=train_subdir,
+        labels_subdir=labels_subdir,
+        patch_size=patch_size,
+        overlap=overlap,
+        output_dir=output_dir,
+    )
+
+    print("Filtering blank patches...")
+    remove_blank_patches(
+        output_dir,
+        filtered_dir,
+        train_subdir=train_subdir,
+        labels_subdir=labels_subdir,
+        train_max_threshold=train_max_threshold,
+        label_min_threshold=label_min_threshold,
+    )
+
+    return result
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Extract and filter patches from dataset")
+    parser.add_argument("--input-dir", type=str, default="data/raw/",
+                        help="Path to raw dataset directory")
+    parser.add_argument("--output-dir", type=str, default="data/processed/patches_256/",
+                        help="Path to output extracted patches")
+    parser.add_argument("--filtered-dir", type=str, default="data/processed/filtered_patches_256/",
+                        help="Path to output filtered patches")
+    parser.add_argument("--patch-size", type=int, default=256,
+                        help="Size of square patches")
+    parser.add_argument("--train-subdir", type=str, default="train",
+                        help="Name of training images subdirectory")
+    parser.add_argument("--labels-subdir", type=str, default="train_labels",
+                        help="Name of labels subdirectory")
+    parser.add_argument("--no-overlap", action="store_true",
+                        help="Disable overlapping patches")
+    parser.add_argument("--train-max-white", type=float, default=5.0,
+                        help="Max percentage of white pixels in train image")
+    parser.add_argument("--label-min-white", type=float, default=2.0,
+                        help="Min percentage of white pixels in label image")
+
+    args = parser.parse_args()
+
+    run_pipeline(
+        input_dir=args.input_dir,
+        output_dir=args.output_dir,
+        filtered_dir=args.filtered_dir,
+        train_subdir=args.train_subdir,
+        labels_subdir=args.labels_subdir,
+        patch_size=args.patch_size,
+        overlap=not args.no_overlap,
+        train_max_threshold=args.train_max_white,
+        label_min_threshold=args.label_min_white,
+    )
