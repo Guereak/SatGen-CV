@@ -1,6 +1,9 @@
 import numpy as np
 from pathlib import Path
 from PIL import Image
+import os
+
+from src.utils.image import find_matching_label_file, white_pixel_percentage
 
 
 def crop_image_into_patches(image, patch_size=256, overlap=False):
@@ -69,10 +72,10 @@ def crop_dataset(dataset_path, train_subdir="train", labels_subdir="train_labels
         train_files = train_files[:num_images]
     
     for train_file in train_files:
-        # Find corresponding label file
-        label_file = labels_dir / train_file.name
-        
-        if not label_file.exists():
+        # Find corresponding label file (handles extension mismatches)
+        label_file = find_matching_label_file(train_file, labels_dir)
+
+        if label_file is None:
             print(f"Warning: No label found for {train_file.name}, skipping...")
             continue
         
@@ -145,8 +148,12 @@ def get_random_crops(dataset_path, train_subdir="train", labels_subdir="train_la
     for _ in range(num_crops):
         # Pick random file
         train_file = np.random.choice(train_files)
-        label_file = labels_dir / train_file.name
-        
+        label_file = find_matching_label_file(train_file, labels_dir)
+
+        if label_file is None:
+            print(f"Warning: No label found for {train_file.name}, skipping...")
+            continue
+
         # Load images
         train_img = np.array(Image.open(train_file))
         label_img = np.array(Image.open(label_file))
@@ -206,20 +213,20 @@ def get_n_random_crops_per_image(dataset_path, train_subdir="train", labels_subd
     metadata = []
     
     for train_file in train_files:
-        label_file = labels_dir / train_file.name
-        
-        if not label_file.exists():
+        label_file = find_matching_label_file(train_file, labels_dir)
+
+        if label_file is None:
             print(f"Warning: No label found for {train_file.name}, skipping...")
             continue
-        
+
         # Load images
         train_img = np.array(Image.open(train_file))
         label_img = np.array(Image.open(label_file))
-        
+
         h, w = train_img.shape[:2]
         max_y = h - patch_size
         max_x = w - patch_size
-        
+
         # Generate n random crops for this image
         for crop_idx in range(n_crops_per_image):
             x = np.random.randint(0, max_x + 1)
@@ -246,3 +253,42 @@ def get_n_random_crops_per_image(dataset_path, train_subdir="train", labels_subd
         'label_crops': all_label_crops,
         'metadata': metadata
     }
+
+
+def remove_blank_patches(
+        input_data_path, output_data_path, train_subdir="train", labels_subdir="train_labels",
+        train_max_threshold=5.0, label_min_threshold=2.0
+):
+    """
+    Filter dataset to remove undesired patches
+
+    Args:
+        input_data_path: Path to input data directory
+        output_data_path: Path to output data directory
+        train_subdir: Name of training images subdirectory
+        labels_subdir: Name of labels subdirectory
+        train_max_threshold: Max percentage of white pixels in train image before discarding
+        label_min_threshold: Min percentage of white pixels in label image before discarding
+    """
+
+    extensions = ['*.png', '*.tif*', '*.jpg']
+    count = 0
+
+    os.makedirs(output_data_path + train_subdir, exist_ok=True)
+    os.makedirs(output_data_path + labels_subdir, exist_ok=True)
+
+    train_patches = sorted([f for ext in extensions for f in Path(input_data_path + train_subdir).glob(ext)])
+    label_patches = sorted([f for ext in extensions for f in Path(input_data_path + labels_subdir).glob(ext)])
+
+    for train, label in zip(train_patches, label_patches):
+        train_img = np.array(Image.open(train))
+        label_img = np.array(Image.open(label))
+
+        if (white_pixel_percentage(train_img) < train_max_threshold
+                and white_pixel_percentage(label_img) > label_min_threshold):
+            count += 1
+            base_name = train.stem
+            Image.fromarray(train_img).save(Path(output_data_path) / train_subdir / f"{base_name}.png")
+            Image.fromarray(label_img).save(Path(output_data_path) / labels_subdir / f"{base_name}.png")
+
+    print(f"Kept: {count / len(train_patches) * 100:.2f}% of patches.")

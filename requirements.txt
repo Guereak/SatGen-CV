@@ -2,8 +2,9 @@
 transformers
 sam3 @ git+https://github.com/Guereak/sam3.git
 accelerate==1.11.0
-tokenizers
+tokenizers>=0.19.0
 huggingface_hub==1.1.5
+numpy==1.26.0
 torch
 torchvision==0.24.1
 requests
@@ -11,6 +12,5 @@ pillow
 dotenv
 matplotlib
 einops
-decord
 opencv-python<4.12
 pycocotools

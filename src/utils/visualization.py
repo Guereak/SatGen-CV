@@ -4,8 +4,10 @@ from PIL import Image
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 
+from src.utils.image import find_matching_label_file
 
-def show_crop_sets(train_crops, label_crops, images_per_row=8, num_sets=2):
+
+def show_crop_sets(train_crops, label_crops, images_per_row=8, num_sets=2, cmap='gray'):
     pairs = [(train_crops, "Train"), (label_crops, "Label")]
     rows = num_sets * 2
 
@@ -16,7 +18,7 @@ def show_crop_sets(train_crops, label_crops, images_per_row=8, num_sets=2):
         for c in range(images_per_row):
             idx = offset + c
             ax = axes[r, c]
-            ax.imshow(crops[idx])
+            ax.imshow(crops[idx], cmap=cmap)
             ax.set_title(f"{title} {idx+1}")
             ax.axis("off")
 
@@ -72,8 +74,10 @@ def visualize_crop_locations(dataset_path, train_subdir="train", labels_subdir="
     
     for idx, (filename, crops) in enumerate(crops_by_file.items()):
         # Load the original images
-        train_img = np.array(Image.open(train_dir / filename))
-        label_img = np.array(Image.open(labels_dir / filename))
+        train_file = train_dir / filename
+        train_img = np.array(Image.open(train_file))
+        label_file = find_matching_label_file(train_file, labels_dir)
+        label_img = np.array(Image.open(label_file))
         
         # Plot train image with bounding boxes
         axes[idx, 0].imshow(train_img)
@@ -112,3 +116,44 @@ def visualize_crop_locations(dataset_path, train_subdir="train", labels_subdir="
     
     return fig
 
+
+def visualize_coverage_map(coverage_stats, image_idx=0, figsize=(12, 5)):
+    """
+    Visualize the coverage map showing how many times each pixel is covered.
+
+    Args:
+        coverage_stats: Output from calculate_crop_coverage_stats
+        image_idx: Index of the image to visualize (default: 0)
+        figsize: Figure size
+    """
+    stats = coverage_stats['per_image_stats'][image_idx]
+    coverage_map = stats['coverage_map']
+
+    fig, axes = plt.subplots(1, 2, figsize=figsize)
+
+    # Coverage heatmap
+    im = axes[0].imshow(coverage_map, cmap='hot', interpolation='nearest')
+    axes[0].set_title(f"Coverage Heatmap\n{stats['source_file']}")
+    axes[0].axis('off')
+    plt.colorbar(im, ax=axes[0], label='Number of overlapping crops')
+
+    # Binary coverage (covered vs not covered)
+    binary_coverage = (coverage_map > 0).astype(float)
+    axes[1].imshow(binary_coverage, cmap='gray', interpolation='nearest')
+    axes[1].set_title(f"Binary Coverage\n{stats['total_area_covered_pct']:.1f}% covered")
+    axes[1].axis('off')
+
+    plt.tight_layout()
+    plt.show()
+
+    # Print statistics
+    print(f"\nStatistics for {stats['source_file']}:")
+    print(f"  Number of crops: {stats['num_crops']}")
+    print(f"  Total area covered: {stats['total_area_covered_pct']:.2f}%")
+    print(f"  Area with overlaps: {stats['overlap_area_pct']:.2f}%")
+    print(
+        f"  Overlap ratio: {stats['overlap_ratio']:.2f} ({100 * stats['overlap_ratio']:.1f}% of covered area is overlapped)")
+    print(f"  Average overlap depth: {stats['avg_overlap_depth']:.2f} crops per covered pixel")
+    print(f"  Max overlap depth: {stats['max_overlap_depth']} crops on same pixel")
+
+    return fig
