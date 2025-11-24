@@ -157,3 +157,81 @@ def visualize_coverage_map(coverage_stats, image_idx=0, figsize=(12, 5)):
     print(f"  Max overlap depth: {stats['max_overlap_depth']} crops on same pixel")
 
     return fig
+
+
+def display_masks_with_scores(image, masks, boxes, scores, ax=None, figsize=(10, 10)):
+    """
+    Display image with masks overlaid and probability scores above each bounding box.
+
+    Args:
+        image: PIL Image or numpy array
+        masks: tensor of shape (N, 1, H, W) containing binary masks
+        boxes: tensor of shape (N, 4) containing bounding boxes [x1, y1, x2, y2]
+        scores: tensor of shape (N,) containing probability scores
+        ax: matplotlib axes to plot on (optional, creates new figure if None)
+        figsize: figure size tuple (only used if ax is None)
+
+    Returns:
+        ax: the matplotlib axes used for plotting
+    """
+    import matplotlib.pyplot as plt
+    import matplotlib.patches as patches
+    import numpy as np
+
+    if ax is None:
+        fig, ax = plt.subplots(1, 1, figsize=figsize)
+
+    # Display the original image
+    ax.imshow(image)
+
+    # Convert tensors to numpy if needed
+    if hasattr(masks, 'cpu'):
+        masks_np = masks.cpu().numpy()
+    else:
+        masks_np = np.array(masks)
+
+    if hasattr(boxes, 'cpu'):
+        boxes_np = boxes.cpu().numpy()
+    else:
+        boxes_np = np.array(boxes)
+
+    if hasattr(scores, 'cpu'):
+        scores_np = scores.cpu().numpy()
+    else:
+        scores_np = np.array(scores)
+
+    # Create a colormap for masks
+    cmap = plt.cm.get_cmap('tab20')
+
+    # Overlay each mask and add score text
+    for i, (mask, box, score) in enumerate(zip(masks_np, boxes_np, scores_np)):
+        # Reshape mask if needed
+        if mask.ndim == 3:
+            mask = mask.squeeze()
+
+        # Create colored mask overlay
+        color = cmap(i % 20)
+        colored_mask = np.zeros((*mask.shape, 4))
+        colored_mask[mask > 0] = [*color[:3], 0.4]  # RGBA with alpha
+        ax.imshow(colored_mask)
+
+        # Draw bounding box
+        x1, y1, x2, y2 = box
+        rect = patches.Rectangle(
+            (x1, y1), x2 - x1, y2 - y1,
+            linewidth=2, edgecolor=color, facecolor='none'
+        )
+        ax.add_patch(rect)
+
+        # Add score text above bounding box
+        ax.text(
+            x1, y1 - 5,  # Position slightly above the box
+            f'{score:.2f}',
+            color='white',
+            fontsize=8,
+            fontweight='bold',
+            bbox=dict(boxstyle='round,pad=0.2', facecolor=color[:3], alpha=0.8)
+        )
+
+    ax.axis('off')
+    return ax

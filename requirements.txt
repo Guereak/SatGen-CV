@@ -14,3 +14,4 @@ matplotlib
 einops
 opencv-python<4.12
 pycocotools
+tifffile
