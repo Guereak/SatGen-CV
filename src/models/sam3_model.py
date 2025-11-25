@@ -2,6 +2,7 @@
 
 import warnings
 from pathlib import Path
+import os
 
 import tifffile
 import torch
@@ -9,9 +10,13 @@ from PIL import Image
 import numpy as np
 from tqdm import tqdm
 import logging
+from dotenv import load_dotenv
 
 from sam3.model_builder import build_sam3_image_model
 from sam3.model.sam3_image_processor import Sam3Processor
+
+# Load environment variables from .env file
+load_dotenv()
 
 logger = logging.getLogger(__name__)
 warnings.filterwarnings("ignore")
@@ -124,8 +129,8 @@ class SAM3Predictor:
         train_dir = Path(directory_path) / train_subdir
         labels_dir = Path(directory_path) / label_subdir
 
-        output_dir = directory_path / "../sam3_predictions"
-        output_dir.mkdir(exist_ok=True)
+        output_dir = (directory_path / "../sam3_predictions").resolve()
+        output_dir.mkdir(exist_ok=True, parents=True)
 
         train_patches = sorted([f for ext in extensions for f in train_dir.glob(ext)])
         label_patches = sorted([f for ext in extensions for f in labels_dir.glob(ext)])
@@ -163,7 +168,7 @@ if __name__ == "__main__":
     if __name__ == "__main__":
         parser = argparse.ArgumentParser()
         parser.add_argument('--device', default='cuda')
-        parser.add_argument('--directory', default='../data/processed/filtered_patches_256/')
+        parser.add_argument('--directory', default='../../data/processed/filtered_patches_256/')
         parser.add_argument('--train-subdir', default='train')
         parser.add_argument('--label-subdir', default='train_labels')
         parser.add_argument('--prompt', default='building')
