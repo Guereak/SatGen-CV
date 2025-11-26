@@ -2,6 +2,10 @@
 data/processed/*
 data/raw/*
 
+# More metadata stuff
+.DS_Store
+.idea/
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]

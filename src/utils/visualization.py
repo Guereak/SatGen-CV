@@ -26,6 +26,36 @@ def show_crop_sets(train_crops, label_crops, images_per_row=8, num_sets=2, cmap=
     plt.show()
 
 
+def show_sam3_predictions(train_crops, label_crops, images_per_row=8, num_sets=2, cmap='gray'):
+    pairs = [(train_crops, "Train"), (label_crops, "Label")]
+    rows = num_sets * 2
+
+    fig, axes = plt.subplots(rows, images_per_row, figsize=(22, 12))
+
+    for r, (crops, title) in enumerate(pairs * num_sets):
+        offset = (r // 2) * images_per_row
+        for c in range(images_per_row):
+            idx = offset + c
+            ax = axes[r, c]
+
+            # Handle label crops (add zero channel for visualization)
+            if title == "Label":
+                img = crops[idx]
+                # Always concatenate zero channel for labels
+                display_img = np.concatenate([img, np.zeros((256, 256, 1))], axis=-1)
+                # Convert to uint8 to avoid the warning
+                display_img = display_img.astype(np.uint8)
+                ax.imshow(display_img)
+            else:
+                ax.imshow(crops[idx], cmap=cmap)
+
+            ax.set_title(f"{title} {idx+1}")
+            ax.axis("off")
+
+    plt.tight_layout()
+    plt.show()
+
+
 def visualize_crop_locations(dataset_path, train_subdir="train", labels_subdir="train_labels",
                              metadata=None, image_name=None, patch_size=256,
                              max_images=5, figsize=(15, 10)):

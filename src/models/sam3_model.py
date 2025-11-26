@@ -110,7 +110,8 @@ class SAM3Predictor:
         directory_path,
         train_subdir,
         label_subdir,
-        prompt
+        prompt,
+        max_instances=None
     ):
         """Run prediction on a batch of images and save masks to disk.
 
@@ -119,6 +120,7 @@ class SAM3Predictor:
             train_subdir: Subdirectory name containing input images.
             label_subdir: Subdirectory name containing label images.
             prompt: Text prompt for SAM3 model.
+            max_instances: Maximum number of instances to process. If None, process all.
         """
 
         extensions = ['*.png', '*.tif*', '*.jpg']
@@ -137,8 +139,14 @@ class SAM3Predictor:
 
         iterator = zip(train_patches, label_patches)
 
+        # Limit to max_instances if specified
+        if max_instances is not None:
+            iterator = list(iterator)[:max_instances]
+        else:
+            iterator = list(iterator)
+
         iterator = tqdm(
-            list(iterator),
+            iterator,
             desc="Processing patches",
             unit="patch"
         )
