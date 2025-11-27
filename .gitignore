@@ -1,7 +1,6 @@
 # Project-specific
 data/processed/*
 data/raw/*
-data/
 
 #environnement
 mon_env/
