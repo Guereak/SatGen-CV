@@ -15,10 +15,18 @@ class ConvBlock(nn.Module):
         return out
 
 class Discriminator(nn.Module):
-    def __init__(self, in_channels=3, features=[64, 128, 256, 512]):
+    def __init__(self, input_channels=2, output_channels=3, features=[64, 128, 256, 512]):
+        """
+        PatchGAN Discriminator for Pix2Pix.
+
+        Args:
+            input_channels: Number of channels in input (segmentation), default 2 (buildings + roads)
+            output_channels: Number of channels in output (RGB image), default 3
+            features: Feature dimensions for each layer
+        """
         super().__init__()
         self.initial = nn.Sequential(
-            nn.Conv2d(in_channels*2, features[0], kernel_size=4, stride=2, padding=1),
+            nn.Conv2d(input_channels + output_channels, features[0], kernel_size=4, stride=2, padding=1),
             nn.LeakyReLU(0.2)
         )
 

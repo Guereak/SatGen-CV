@@ -38,7 +38,15 @@ class UpBlock(nn.Module):
 
 
 class Generator(nn.Module):
-    def __init__(self, in_channels, features=64):
+    def __init__(self, in_channels=2, out_channels=3, features=64):
+        """
+        U-Net Generator for Pix2Pix.
+
+        Args:
+            in_channels: Number of input channels (segmentation), default 2 (buildings + roads)
+            out_channels: Number of output channels (RGB image), default 3
+            features: Base number of feature channels, default 64
+        """
         super().__init__()
         self.initial_down = nn.Sequential(
             nn.Conv2d(in_channels, features, kernel_size=4, stride=2, padding=1),
@@ -66,7 +74,7 @@ class Generator(nn.Module):
         self.up7 = UpBlock(features*2*2, features, use_dropout=False)
 
         self.final = nn.Sequential(
-            nn.ConvTranspose2d(features*2, in_channels, kernel_size=4, stride=2, padding=1),
+            nn.ConvTranspose2d(features*2, out_channels, kernel_size=4, stride=2, padding=1),
             nn.Tanh()
         )
 
