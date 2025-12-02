@@ -4,6 +4,7 @@ from PIL import Image
 import torch
 from torch.utils.data import Dataset
 import numpy as np
+import tifffile
 
 
 class SatGenDataset(Dataset):
@@ -21,9 +22,7 @@ class SatGenDataset(Dataset):
     def __init__(self, images_dir, labels_dir, transform=None):
         self.images_dir = Path(images_dir)
         self.labels_dir = Path(labels_dir)
-
-        # Get all image files
-        self.image_files = [f for f in os.listdir(images_dir) if f.endswith('.tiff')]
+        self.image_files = sorted([f for f in os.listdir(images_dir) if f.endswith(('.tiff', '.png'))])
 
     def __len__(self):
         return len(self.image_files)
@@ -35,16 +34,18 @@ class SatGenDataset(Dataset):
             target_tensor: [3, H, W] - RGB satellite image
         """
         img_name = self.image_files[idx]
-        label_name = img_name.replace('.tiff', '.tif')
+        base_name = img_name.rsplit('.', 1)[0]  # Remove extension
+        label_name = f"{base_name}_processed.tiff"
 
         img_path = self.images_dir / img_name
         label_path = self.labels_dir / label_name
 
+        if not label_path.exists():
+            raise FileNotFoundError(f"Label file not found: {label_path}")
+
         target_img = Image.open(img_path).convert('RGB')
         target_array = np.array(target_img)
-
-        label_img = Image.open(label_path)
-        label_array = np.array(label_img)
+        label_array = tifffile.imread(label_path)
 
         # Check label image is in right format
         assert len(label_array.shape) == 3 and label_array.shape[2] == 2, f"Unexpected label shape: {label_array.shape}"
@@ -63,3 +64,47 @@ class SatGenDataset(Dataset):
         return input_tensor, target_tensor
 
 
+def get_dataloaders(train_dir, train_labels_dir, val_dir, val_labels_dir,
+                    batch_size=16, num_workers=4):
+    """
+    Create train and validation dataloaders.
+
+    Args:
+        train_dir: Path to training images
+        train_labels_dir: Path to training labels
+        val_dir: Path to validation images
+        val_labels_dir: Path to validation labels
+        batch_size: Batch size for training
+        num_workers: Number of worker processes for data loading
+
+    Returns:
+        train_loader, val_loader
+    """
+    train_dataset = SatGenDataset(
+        images_dir=train_dir,
+        labels_dir=train_labels_dir,
+    )
+
+    val_dataset = SatGenDataset(
+        images_dir=val_dir,
+        labels_dir=val_labels_dir,
+    )
+
+    train_loader = torch.utils.data.DataLoader(
+        train_dataset,
+        batch_size=batch_size,
+        shuffle=True,
+        num_workers=num_workers,
+        pin_memory=True,
+        drop_last=True  # Drop incomplete batches
+    )
+
+    val_loader = torch.utils.data.DataLoader(
+        val_dataset,
+        batch_size=batch_size,
+        shuffle=False,
+        num_workers=num_workers,
+        pin_memory=True
+    )
+
+    return train_loader, val_loader

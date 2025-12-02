@@ -9,9 +9,12 @@ torch
 torchvision==0.24.1
 requests
 pillow
-dotenv
+python-dotenv
 matplotlib
 einops
 opencv-python<4.12
 pycocotools
 tifffile
+tensorboard
+tqdm
+pyyaml
