@@ -1,6 +1,9 @@
 # Project-specific
 data/processed/*
 data/raw/*
+runs/
+checkpoints/
+
 
 # More metadata stuff
 .DS_Store
