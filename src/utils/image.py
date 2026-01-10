@@ -150,50 +150,23 @@ def compare_binary_masks(pred_mask, true_mask, threshold=0.5):
     elif isinstance(true_mask, Image.Image):
         true_mask = np.array(true_mask)
     
-    # Normalize if necessary (values between 0 and 1)
     if pred_mask.max() > 1:
         pred_mask = pred_mask / 255.0
     if true_mask.max() > 1:
         true_mask = true_mask / 255.0
     
-    # Binarize masks
     pred_binary = (pred_mask > threshold).astype(int).flatten()
     true_binary = (true_mask > threshold).astype(int).flatten()
     
-    # Confusion matrix (sans sklearn)
+    # Confusion matrix
     tp = np.sum((pred_binary == 1) & (true_binary == 1))
-    tn = np.sum((pred_binary == 0) & (true_binary == 0))
     fp = np.sum((pred_binary == 1) & (true_binary == 0))
     fn = np.sum((pred_binary == 0) & (true_binary == 1))
     
-    # Calculate metrics
-    iou = tp / (tp + fp + fn) if (tp + fp + fn) > 0 else 0
-    precision = tp / (tp + fp) if (tp + fp) > 0 else 0
-    recall = tp / (tp + fn) if (tp + fn) > 0 else 0
-    f1 = 2 * (precision * recall) / (precision + recall) if (precision + recall) > 0 else 0
+    iou = tp / (tp + fp + fn) if (tp + fp + fn) > 0 else 0    
+
+    return { 'IoU': float(iou) }
     
-    # Dice coefficient
-    dice = (2 * tp) / (2 * tp + fp + fn) if (2 * tp + fp + fn) > 0 else 0
-    
-    # Accuracy
-    accuracy = (tp + tn) / (tp + tn + fp + fn)
-    
-    # Specificity
-    specificity = tn / (tn + fp) if (tn + fp) > 0 else 0
-    
-    return {
-        'IoU': float(iou),
-        'Dice': float(dice),
-        'Precision': float(precision),
-        'Recall': float(recall),
-        'F1-Score': float(f1),
-        'Accuracy': float(accuracy),
-        'Specificity': float(specificity),
-        'TP': int(tp),
-        'TN': int(tn),
-        'FP': int(fp),
-        'FN': int(fn)
-    }
 
 def evaluate_predictions(img2label, threshold=0.5, isAverage=True):
     """
@@ -226,7 +199,7 @@ def evaluate_predictions(img2label, threshold=0.5, isAverage=True):
         return results
     
     # Calculate averages
-    metric_keys = ['IoU', 'Dice', 'Precision', 'Recall', 'F1-Score', 'Accuracy', 'Specificity']
+    metric_keys = ['IoU']
     avg_metrics = {key: np.mean([r[key] for r in results]) for key in metric_keys}
     std_metrics = {f'{key}_std': np.std([r[key] for r in results]) for key in metric_keys}
     
