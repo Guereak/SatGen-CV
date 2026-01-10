@@ -6,6 +6,12 @@ import torch
 import tqdm
 import tifffile
 
+from .noise_strategies import (
+    NoiseStrategy,
+    create_noise_strategy,
+    is_empty_patch
+)
+
 
 @dataclass
 class PatchInfo:
@@ -144,16 +150,72 @@ class SeamlessGenerator:
         patch_size: int = 256,
         overlap: int = 64,
         blend_mode: Literal["linear", "cosine"] = "cosine",
-        device: str = "cpu"
+        device: str = "cpu",
+        noise_strategy: Optional[Union[str, NoiseStrategy]] = "gaussian",
+        noise_kwargs: Optional[dict] = None,
+        empty_threshold: float = 0.01,
+        enable_dropout: bool = True
     ):
+        """
+        Initialize SeamlessGenerator with support for noise injection.
+
+        Args:
+            model: PyTorch model (Pix2Pix generator)
+            patch_size: Size of patches for processing
+            overlap: Overlap between patches
+            blend_mode: Blending mode ("linear" or "cosine")
+            device: Device to run model on
+            noise_strategy: Noise strategy for empty patches
+                - String: "gaussian", "sparse", "uniform", "per_channel", "none"
+                - NoiseStrategy instance
+                - None: No noise
+            noise_kwargs: Keyword arguments for noise strategy
+            empty_threshold: Threshold for considering a patch "empty"
+            enable_dropout: Keep dropout enabled during inference (recommended for Pix2Pix)
+        """
         self.model = model
         self.patch_size = patch_size
         self.overlap = overlap
         self.blend_mode = blend_mode
         self.device = device
-        
+        self.empty_threshold = empty_threshold
+        self.enable_dropout = enable_dropout
+
         self.weights = create_blend_weights(patch_size, overlap, blend_mode)
-    
+
+        # Setup noise strategy
+        if isinstance(noise_strategy, str):
+            noise_kwargs = noise_kwargs or {}
+            self.noise_strategy = create_noise_strategy(noise_strategy, **noise_kwargs)
+        else:
+            self.noise_strategy = noise_strategy
+
+        # Configure model mode for Pix2Pix
+        if self.enable_dropout:
+            self._enable_pix2pix_dropout()
+        else:
+            # Standard eval mode (all layers including dropout)
+            self.model.eval()
+
+    def _enable_pix2pix_dropout(self):
+        """
+        Configure model for Pix2Pix inference with dropout enabled.
+
+        In Pix2Pix, dropout is kept enabled during test time to add stochasticity.
+        This is different from standard practice where dropout is disabled during inference.
+
+        Configuration:
+        - Dropout layers: TRAIN mode (enables dropout during inference)
+        - BatchNorm layers: EVAL mode (use running stats, don't update them)
+        - Other layers: EVAL mode (no gradient computation)
+        """
+        # First, set entire model to eval mode
+        self.model.eval()
+
+        # Then, explicitly enable dropout layers
+        for module in self.model.modules():
+            if isinstance(module, torch.nn.Dropout):
+                module.train()  # Override: keep dropout in training mode
 
     def _extract_patch(self, image: np.ndarray, x: int, y: int) -> np.ndarray:
         """Extract a patch from the input image, with padding if needed."""
@@ -188,49 +250,78 @@ class SeamlessGenerator:
     
 
     def _run_model(self, patch: np.ndarray) -> np.ndarray:
-        """ Run the Pix2Pix generator on a single patch. """
-        
+        """
+        Run the Pix2Pix generator on a single patch.
+
+        Args:
+            patch: Input patch (H, W, C) in range [0, 255]
+
+        Returns:
+            Generated patch (H, W, C) in range [0, 255]
+        """
+        # Check if patch is empty and apply noise if needed
+        is_empty = is_empty_patch(patch, threshold=self.empty_threshold)
+
+        if is_empty and self.noise_strategy is not None:
+            patch = self.noise_strategy.add_noise(patch, is_empty=True)
+
         # Preprocess
         patch_tensor = torch.from_numpy(patch).permute(2, 0, 1).float()
         patch_tensor = patch_tensor / 255.0
         patch_tensor = (patch_tensor - 0.5) / 0.5
         patch_tensor = patch_tensor.unsqueeze(0).to(self.device)
-        
+
+        # Run model (note: no_grad is used but dropout is still enabled for Pix2Pix)
         with torch.no_grad():
             output = self.model(patch_tensor)
-        
+
         # Postprocess
         output = output.squeeze(0).permute(1, 2, 0).cpu().numpy()
         output = (output + 1) / 2
         output = (output * 255).clip(0, 255).astype(np.uint8)
-        
+
         return output
     
 
     def generate(
         self,
         segmentation_mask: np.ndarray,
+        show_progress: bool = False
     ) -> np.ndarray:
-        """ Generate a seamless large image from a segmentation mask. """
+        """
+        Generate a seamless large image from a segmentation mask.
+
+        Args:
+            segmentation_mask: Input segmentation mask (H, W, C)
+            show_progress: Show progress bar
+
+        Returns:
+            Generated RGB image (H, W, 3)
+        """
         height, width = segmentation_mask.shape[:2]
-        
+
         positions = compute_patch_grid(
             (height, width),
             self.patch_size,
             self.overlap
         )
-        
-        patches = []        
-        for x, y in positions:
+
+        patches = []
+        iterator = tqdm.tqdm(positions, desc="Generating patches") if show_progress else positions
+
+        for x, y in iterator:
             input_patch = self._extract_patch(segmentation_mask, x, y)
             output_patch = self._run_model(input_patch)
-            
+
             patches.append(PatchInfo(
                 image=output_patch,
                 x=x,
                 y=y
             ))
-        
+
+        if show_progress:
+            print("Blending patches...")
+
         return blend_patches(
             patches,
             (height, width),

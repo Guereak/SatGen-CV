@@ -18,3 +18,7 @@ tifffile
 tensorboard
 tqdm
 pyyaml
+scipy
+fastapi
+uvicorn[standard]
+python-multipart
