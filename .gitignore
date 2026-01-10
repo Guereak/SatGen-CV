@@ -6,6 +6,9 @@ data/examples/evaluate_sam3/patches_256
 
 #environnement
 mon_env/
+runs/
+checkpoints/
+
 
 # More metadata stuff
 .DS_Store
