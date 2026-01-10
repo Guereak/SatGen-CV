@@ -1,6 +1,11 @@
 import numpy as np
 from pathlib import Path
 
+import numpy as np
+from PIL import Image
+from pathlib import Path
+import tifffile
+
 
 def white_pixel_percentage(img):
     if img.ndim == 2:
@@ -119,3 +124,88 @@ def calculate_crop_coverage_stats(metadata, patch_size=256, image_size=(1500, 15
     return overall
 
 
+
+def compare_binary_masks(pred_mask, true_mask, threshold=0.5):
+    """
+    Compare two binary masks (prediction vs ground truth).
+    
+    Args:
+        pred_mask: Predicted mask (PIL Image, numpy array, or file path)
+        true_mask: Ground truth mask (PIL Image, numpy array, or file path)
+        threshold: Threshold for binarizing predictions (default: 0.5)
+    
+    Returns:
+        dict: Dictionary containing IoU, Precision, Recall, F1-Score, Dice, etc.
+    """
+    # Load images if they are paths
+    if isinstance(pred_mask, (str, Path)):
+        pred_mask = tifffile.imread(pred_mask) if str(pred_mask).endswith('.tiff') else np.array(Image.open(pred_mask))
+        pred_mask = pred_mask.sum(axis=2).clip(0, 255).astype('uint8')
+    elif isinstance(pred_mask, Image.Image):
+        pred_mask = np.array(pred_mask)
+        pred_mask = pred_mask.sum(axis=2).clip(0, 255).astype('uint8')
+    
+    if isinstance(true_mask, (str, Path)):
+        true_mask = tifffile.imread(true_mask) if str(true_mask).endswith('.tiff') else np.array(Image.open(true_mask))
+    elif isinstance(true_mask, Image.Image):
+        true_mask = np.array(true_mask)
+    
+    if pred_mask.max() > 1:
+        pred_mask = pred_mask / 255.0
+    if true_mask.max() > 1:
+        true_mask = true_mask / 255.0
+    
+    pred_binary = (pred_mask > threshold).astype(int).flatten()
+    true_binary = (true_mask > threshold).astype(int).flatten()
+    
+    # Confusion matrix
+    tp = np.sum((pred_binary == 1) & (true_binary == 1))
+    fp = np.sum((pred_binary == 1) & (true_binary == 0))
+    fn = np.sum((pred_binary == 0) & (true_binary == 1))
+    
+    iou = tp / (tp + fp + fn) if (tp + fp + fn) > 0 else 0    
+
+    return { 'IoU': float(iou) }
+    
+
+def evaluate_predictions(img2label, threshold=0.5, isAverage=True):
+    """
+    Evaluate multiple image pairs and return average metrics.
+    
+    Args:
+        img2label: Dictionary mapping {ground_truth_path: prediction_path}
+        threshold: Threshold for binarizing predictions (default: 0.5)
+        isAverage: boolean to return average data or not
+    
+    Returns:
+        dict: Dictionary with average metrics, standard deviations, and individual results
+    """
+    results = []
+    
+    for true_path, pred_path in img2label.items():
+        try:
+            metrics = compare_binary_masks(pred_path, true_path, threshold)
+            metrics['true_path'] = str(true_path.name)
+            metrics['pred_path'] = str(pred_path.name)
+            results.append(metrics)
+        except Exception as e:
+            print(f"Error with {true_path.name}: {e}")
+            continue
+    
+    if not results:
+        return None
+    
+    if not isAverage:
+        return results
+    
+    # Calculate averages
+    metric_keys = ['IoU']
+    avg_metrics = {key: np.mean([r[key] for r in results]) for key in metric_keys}
+    std_metrics = {f'{key}_std': np.std([r[key] for r in results]) for key in metric_keys}
+    
+    return {
+        'average': avg_metrics,
+        'std': std_metrics,
+        'individual': results,
+        'count': len(results)
+    }
