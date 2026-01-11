@@ -108,7 +108,7 @@ class Pix2PixTrainer:
 
             # Train Generator
             self.optimizer_G.zero_grad()
-            fake_imgs = self.generator(input_imgs)
+            # fake_imgs = self.generator(input_imgs) # No need to recompute as already computed in Discriminator training
 
             pred_fake = self.discriminator(input_imgs, fake_imgs)
             target_real = torch.ones_like(pred_fake)
@@ -237,7 +237,7 @@ class Pix2PixTrainer:
 
         best_val_loss = float('inf')
 
-        for epoch in range(self.current_epoch, self.config['num_epochs']):
+        for epoch in range(self.current_epoch + 1, self.config['num_epochs']):
             self.current_epoch = epoch
 
             # Train
