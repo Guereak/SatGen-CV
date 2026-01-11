@@ -154,7 +154,7 @@ def crop_dataset(dataset_path, train_subdir="train", labels_subdir="train_labels
 
 
 def get_random_crops(dataset_path, train_subdir="train", labels_subdir="train_labels",
-                     patch_size=256, num_crops=100):
+                     patch_size=256, num_crops=100, new_size=None):
     """
     Extract random crops from the dataset (useful for quick sampling).
     
@@ -186,8 +186,13 @@ def get_random_crops(dataset_path, train_subdir="train", labels_subdir="train_la
             continue
 
         # Load images
-        train_img = np.array(Image.open(train_file))
-        label_img = np.array(Image.open(label_file))
+        train_img = Image.open(train_file)
+        label_img = Image.open(label_file)
+        if new_size:
+            train_img = train_img.resize(new_size)
+            label_img = label_img.resize(new_size)
+        train_img = np.array(train_img)
+        label_img = np.array(label_img)
         
         h, w = train_img.shape[:2]
         
