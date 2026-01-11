@@ -1,14 +1,10 @@
 # Project-specific
 data/processed/*
 data/raw/*
-data/examples/evaluate_sam3/filtered_patches_256/
-data/examples/evaluate_sam3/patches_256
-
-#environnement
-mon_env/
+data/examples/evaluate_sam3/*
 runs/
 checkpoints/
-
+.vscode/
 
 # More metadata stuff
 .DS_Store

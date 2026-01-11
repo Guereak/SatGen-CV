@@ -111,7 +111,8 @@ class SAM3Predictor:
         train_subdir,
         label_subdir,
         prompt,
-        max_instances=None
+        max_instances=None,
+        output_dir=None
     ):
         """Run prediction on a batch of images and save masks to disk.
 
@@ -121,6 +122,7 @@ class SAM3Predictor:
             label_subdir: Subdirectory name containing label images.
             prompt: Text prompt for SAM3 model.
             max_instances: Maximum number of instances to process. If None, process all.
+            output_dir: Directory to save output files. If None, defaults to '../sam3_predictions' relative to directory_path.
         """
 
         extensions = ['*.png', '*.tif*', '*.jpg']
@@ -131,7 +133,10 @@ class SAM3Predictor:
         train_dir = Path(directory_path) / train_subdir
         labels_dir = Path(directory_path) / label_subdir
 
-        output_dir = (directory_path / "../sam3_predictions").resolve()
+        if output_dir is None:
+            output_dir = (directory_path / "../sam3_predictions").resolve()
+        else:
+            output_dir = Path(output_dir)
         output_dir.mkdir(exist_ok=True, parents=True)
 
         train_patches = sorted([f for ext in extensions for f in train_dir.glob(ext)])
@@ -180,6 +185,7 @@ if __name__ == "__main__":
         parser.add_argument('--train-subdir', default='train')
         parser.add_argument('--label-subdir', default='train_labels')
         parser.add_argument('--prompt', default='building')
+        parser.add_argument('--output-dir', default=None, help='Output directory for processed files')
 
         args = parser.parse_args()
 
@@ -191,5 +197,6 @@ if __name__ == "__main__":
             directory_path=args.directory,
             train_subdir=args.train_subdir,
             label_subdir=args.label_subdir,
-            prompt=args.prompt
+            prompt=args.prompt,
+            output_dir=args.output_dir
         )

@@ -1,0 +1,51 @@
+# Pix2Pix Training Configuration
+
+# Model Architecture
+model:
+  input_channels: 2  # Buildings + roads segmentation
+  output_channels: 3  # RGB satellite imagery
+  generator_features: 64  # Base feature dimension for U-Net
+  discriminator_features: [64, 128, 256, 512]  # PatchGAN feature dimensions
+
+# Training Hyperparameters
+training:
+  num_epochs: 200
+  batch_size: 16
+  learning_rate:
+    generator: 0.0002
+    discriminator: 0.0002
+  optimizer:
+    beta1: 0.5  # Adam beta1 parameter
+    beta2: 0.999  # Adam beta2 parameter
+  loss:
+    lambda_l1: 100  # Weight for L1 reconstruction loss
+
+# Data Configuration
+data:
+  train_dir: data/processed/filtered_patches_256/train
+  train_labels_dir: data/processed/sam3_enhanced_patches_256/sam3_predictions
+  val_dir: data/processed/filtered_patches_256/train
+  val_labels_dir: data/processed/sam3_enhanced_patches_256/sam3_predictions
+  test_dir: data/processed/filtered_patches_256/train
+  test_labels_dir: data/processed/sam3_enhanced_patches_256/sam3_predictions
+  num_workers: 4  # Number of data loading workers
+
+# Preprocessing Configuration
+preprocessing:
+  # Dataset-specific resize settings
+  # Maps dataset names to target sizes [width, height]
+  # Set to null or omit datasets that don't need resizing
+  resize:
+    AerialImageDataset: [1500, 1500]  # Resize from 5000x5000 to match MassachusettsRoadDataSet
+    # MassachusettsRoadDataSet: null  # Already 1500x1500, no resize needed
+
+# Logging and Checkpoints
+logging:
+  checkpoint_dir: checkpoints
+  log_dir: runs/pix2pix  # Tensorboard logs
+  log_interval: 10  # Log metrics every N batches
+  save_interval: 10  # Save checkpoint every N epochs
+  image_log_interval: 5  # Log sample images every N epochs
+
+# Hardware
+device: cuda  # cuda or cpu (auto-detected if available)
