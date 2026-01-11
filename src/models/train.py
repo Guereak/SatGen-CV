@@ -108,7 +108,7 @@ class Pix2PixTrainer:
 
             # Train Generator
             self.optimizer_G.zero_grad()
-            # fake_imgs = self.generator(input_imgs) # No need to recompute as already computed in Discriminator training
+            fake_imgs = self.generator(input_imgs)
 
             pred_fake = self.discriminator(input_imgs, fake_imgs)
             target_real = torch.ones_like(pred_fake)
