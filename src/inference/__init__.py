@@ -46,7 +46,6 @@ __all__ = [
     "GaussianNoiseStrategy",
     "SparseNoiseStrategy",
     "UniformNoiseStrategy",
-    "PerChannelNoiseStrategy",
     "create_noise_strategy",
     "is_empty_patch",
 ]
