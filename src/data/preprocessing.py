@@ -2,8 +2,39 @@ import numpy as np
 from pathlib import Path
 from PIL import Image
 import os, argparse
+import yaml
 
 from src.utils.image import find_matching_label_file, white_pixel_percentage
+
+
+def load_resize_config(config_path=None):
+    """
+    Load resize configuration from config.yaml
+
+    Args:
+        config_path: Path to config.yaml file. If None, tries to find it in project root.
+
+    Returns:
+        Dictionary mapping dataset names to target sizes [width, height], or empty dict if not found
+    """
+    if config_path is None:
+        # Try to find config.yaml in common locations
+        possible_paths = [
+            Path("config.yaml"),
+            Path(__file__).parent.parent.parent / "config.yaml",
+        ]
+        for path in possible_paths:
+            if path.exists():
+                config_path = path
+                break
+
+    if config_path is None or not Path(config_path).exists():
+        return {}
+
+    with open(config_path, 'r') as f:
+        config = yaml.safe_load(f)
+
+    return config.get('preprocessing', {}).get('resize', {})
 
 
 def crop_image_into_patches(image, patch_size=256, overlap=False):
@@ -123,7 +154,7 @@ def crop_dataset(dataset_path, train_subdir="train", labels_subdir="train_labels
 
 
 def get_random_crops(dataset_path, train_subdir="train", labels_subdir="train_labels",
-                     patch_size=256, num_crops=100):
+                     patch_size=256, num_crops=100, new_size=None):
     """
     Extract random crops from the dataset (useful for quick sampling).
     
@@ -155,8 +186,13 @@ def get_random_crops(dataset_path, train_subdir="train", labels_subdir="train_la
             continue
 
         # Load images
-        train_img = np.array(Image.open(train_file))
-        label_img = np.array(Image.open(label_file))
+        train_img = Image.open(train_file)
+        label_img = Image.open(label_file)
+        if new_size:
+            train_img = train_img.resize(new_size)
+            label_img = label_img.resize(new_size)
+        train_img = np.array(train_img)
+        label_img = np.array(label_img)
         
         h, w = train_img.shape[:2]
         
@@ -294,72 +330,187 @@ def remove_blank_patches(
     print(f"Kept: {count / len(train_patches) * 100:.2f}% of patches.")
 
 
-def run_pipeline(
-    input_dir,
-    output_dir,
-    filtered_dir,
-    train_subdir="train",
-    labels_subdir="train_labels",
+def process_dataset_split(
+    dataset_path,
+    split_name,
+    output_base_dir,
+    dataset_name,
+    images_subdir="images",
+    labels_subdir="gt",
     patch_size=256,
     overlap=True,
     train_max_threshold=5.0,
     label_min_threshold=2.0,
+    resize_target=None,
 ):
     """
-    Run the full preprocessing pipeline: extract patches then filter blank ones.
+    Process a single split (train/test/val) of a dataset with filtering.
+    Extracts patches and applies filtering in one pass.
 
     Args:
-        input_dir: Path to raw dataset directory
-        output_dir: Path to output extracted patches
-        filtered_dir: Path to output filtered patches
-        train_subdir: Name of training images subdirectory
-        labels_subdir: Name of labels subdirectory
+        dataset_path: Path to the dataset split (e.g., data/raw/AerialImageDataset/train)
+        split_name: Name of the split (train, test, val)
+        output_base_dir: Base output directory (e.g., data/processed)
+        dataset_name: Name of the dataset (e.g., AerialImageDataset)
+        images_subdir: Subdirectory containing images
+        labels_subdir: Subdirectory containing labels
         patch_size: Size of square patches
         overlap: Whether patches should overlap
         train_max_threshold: Max percentage of white pixels in train image
         label_min_threshold: Min percentage of white pixels in label image
+        resize_target: Optional tuple/list [width, height] to resize images before cropping
 
     Returns:
-        Dictionary with results from crop_dataset
+        Number of patches saved
     """
-    os.makedirs(output_dir, exist_ok=True)
+    images_dir = Path(dataset_path) / images_subdir
+    labels_dir = Path(dataset_path) / labels_subdir
 
-    print("Extracting patches from dataset...")
-    result = crop_dataset(
-        input_dir,
-        train_subdir=train_subdir,
-        labels_subdir=labels_subdir,
-        patch_size=patch_size,
-        overlap=overlap,
-        output_dir=output_dir,
-    )
+    if not images_dir.exists() or not labels_dir.exists():
+        print(f"  Skipping {split_name}: directories not found")
+        return 0
 
-    print("Filtering blank patches...")
-    remove_blank_patches(
-        output_dir,
-        filtered_dir,
-        train_subdir=train_subdir,
-        labels_subdir=labels_subdir,
-        train_max_threshold=train_max_threshold,
-        label_min_threshold=label_min_threshold,
-    )
+    # Create output directory
+    output_dir = Path(output_base_dir) / f"{split_name}_patches_{patch_size}" / dataset_name
+    output_images_dir = output_dir / images_subdir
+    output_labels_dir = output_dir / labels_subdir
+    output_images_dir.mkdir(parents=True, exist_ok=True)
+    output_labels_dir.mkdir(parents=True, exist_ok=True)
 
-    return result
+    # Get all image files
+    extensions = ["*.tif*", "*.png", "*.jpg"]
+    image_files = sorted([f for ext in extensions for f in images_dir.glob(ext)])
+
+    total_patches = 0
+    saved_patches = 0
+
+    print(f"  Processing {split_name} split: {len(image_files)} images")
+
+    for img_file in image_files:
+        label_file = find_matching_label_file(img_file, labels_dir)
+
+        if label_file is None:
+            print(f"    Warning: No label found for {img_file.name}, skipping...")
+            continue
+
+        # Load images
+        img = Image.open(img_file)
+        label = Image.open(label_file)
+
+        # Resize if needed
+        if resize_target is not None:
+            target_width, target_height = resize_target
+            original_size = img.size
+            img = img.resize((target_width, target_height), Image.Resampling.LANCZOS)
+            label = label.resize((target_width, target_height), Image.Resampling.NEAREST)
+            if img_file == image_files[0]:  # Print only for first image
+                print(f"    Resizing images from {original_size} to {(target_width, target_height)}")
+
+        # Extract patches
+        img_patches, coords = crop_image_into_patches(img, patch_size, overlap)
+        label_patches, _ = crop_image_into_patches(label, patch_size, overlap)
+
+        total_patches += len(img_patches)
+
+        # Filter and save patches
+        base_name = img_file.stem
+        for i, (img_patch, label_patch, coord) in enumerate(zip(img_patches, label_patches, coords)):
+            # Apply filtering
+            if (white_pixel_percentage(img_patch) < train_max_threshold and
+                white_pixel_percentage(label_patch) > label_min_threshold):
+
+                # Save filtered patch
+                patch_name = f"{base_name}_patch_{i:03d}_x{coord[0]}_y{coord[1]}.png"
+                Image.fromarray(img_patch).save(output_images_dir / patch_name)
+                Image.fromarray(label_patch).save(output_labels_dir / patch_name)
+                saved_patches += 1
+
+    keep_percentage = (saved_patches / total_patches * 100) if total_patches > 0 else 0
+    print(f"    Kept {saved_patches}/{total_patches} patches ({keep_percentage:.1f}%)")
+
+    return saved_patches
+
+
+def process_all_datasets(
+    raw_data_dir="data/raw",
+    output_dir="data/processed",
+    patch_size=256,
+    overlap=True,
+    train_max_threshold=5.0,
+    label_min_threshold=2.0,
+    images_subdir="images",
+    labels_subdir="gt",
+    config_path=None,
+):
+    """
+    Process all datasets in the raw data directory.
+    Creates organized structure: data/processed/{train,test,val}_patches_256/<dataset_name>/
+    """
+    raw_data_path = Path(raw_data_dir)
+
+    if not raw_data_path.exists():
+        raise ValueError(f"Raw data directory not found: {raw_data_dir}")
+
+    # Load resize configuration
+    resize_config = load_resize_config(config_path)
+    if resize_config:
+        print(f"Loaded resize config: {resize_config}")
+
+    # Find all datasets (subdirectories in raw data dir)
+    datasets = [d for d in raw_data_path.iterdir() if d.is_dir() and not d.name.startswith('.')]
+
+    print(f"Found {len(datasets)} datasets: {[d.name for d in datasets]}")
+    print(f"Output directory: {output_dir}")
+    print(f"Patch size: {patch_size}, Overlap: {overlap}")
+    print(f"Filters: train_max_white={train_max_threshold}%, label_min_white={label_min_threshold}%")
+    print()
+
+    total_saved = 0
+
+    for dataset_dir in datasets:
+        dataset_name = dataset_dir.name
+        print(f"Processing dataset: {dataset_name}")
+
+        # Get resize target for this dataset if configured
+        resize_target = resize_config.get(dataset_name)
+        if resize_target:
+            print(f"  Will resize to: {resize_target}")
+
+        # Process each split (train, test, val)
+        for split in ["train", "test", "val"]:
+            split_path = dataset_dir / split
+            if split_path.exists():
+                saved = process_dataset_split(
+                    dataset_path=split_path,
+                    split_name=split,
+                    output_base_dir=output_dir,
+                    dataset_name=dataset_name,
+                    images_subdir=images_subdir,
+                    labels_subdir=labels_subdir,
+                    patch_size=patch_size,
+                    overlap=overlap,
+                    train_max_threshold=train_max_threshold,
+                    label_min_threshold=label_min_threshold,
+                    resize_target=resize_target,
+                )
+                total_saved += saved
+
+        print()
+
+    print(f"Total patches saved: {total_saved}")
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Extract and filter patches from dataset")
-    parser.add_argument("--input-dir", type=str, default="data/raw/",
-                        help="Path to raw dataset directory")
-    parser.add_argument("--output-dir", type=str, default="data/processed/patches_256/",
-                        help="Path to output extracted patches")
-    parser.add_argument("--filtered-dir", type=str, default="data/processed/filtered_patches_256/",
-                        help="Path to output filtered patches")
+    parser.add_argument("--raw-data-dir", type=str, default="data/raw",
+                        help="Path to raw data directory")
+    parser.add_argument("--output-dir", type=str, default="data/processed",
+                        help="Path to output directory")
     parser.add_argument("--patch-size", type=int, default=256,
                         help="Size of square patches")
-    parser.add_argument("--train-subdir", type=str, default="train",
-                        help="Name of training images subdirectory")
-    parser.add_argument("--labels-subdir", type=str, default="train_labels",
+    parser.add_argument("--images-subdir", type=str, default="images",
+                        help="Name of images subdirectory")
+    parser.add_argument("--labels-subdir", type=str, default="gt",
                         help="Name of labels subdirectory")
     parser.add_argument("--no-overlap", action="store_true",
                         help="Disable overlapping patches")
@@ -367,17 +518,19 @@ if __name__ == "__main__":
                         help="Max percentage of white pixels in train image")
     parser.add_argument("--label-min-white", type=float, default=2.0,
                         help="Min percentage of white pixels in label image")
+    parser.add_argument("--config", type=str, default=None,
+                        help="Path to config.yaml file (auto-detected if not specified)")
 
     args = parser.parse_args()
 
-    run_pipeline(
-        input_dir=args.input_dir,
+    process_all_datasets(
+        raw_data_dir=args.raw_data_dir,
         output_dir=args.output_dir,
-        filtered_dir=args.filtered_dir,
-        train_subdir=args.train_subdir,
-        labels_subdir=args.labels_subdir,
         patch_size=args.patch_size,
         overlap=not args.no_overlap,
         train_max_threshold=args.train_max_white,
         label_min_threshold=args.label_min_white,
+        images_subdir=args.images_subdir,
+        labels_subdir=args.labels_subdir,
+        config_path=args.config,
     )

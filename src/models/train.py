@@ -237,7 +237,7 @@ class Pix2PixTrainer:
 
         best_val_loss = float('inf')
 
-        for epoch in range(self.current_epoch, self.config['num_epochs']):
+        for epoch in range(self.current_epoch + 1, self.config['num_epochs']):
             self.current_epoch = epoch
 
             # Train
