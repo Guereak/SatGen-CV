@@ -16,13 +16,13 @@ class SatGenDataset(Dataset):
     - Target: 3-channel RGB satellite/aerial imagery from train
 
     Args:
-        images_dir: Directory containing RGB satellite images (.tiff)
-        labels_dir: Directory containing segmentation labels (.tif)
+        images_dir: Directory containing RGB satellite images (.png)
+        labels_dir: Directory containing segmentation labels (_processed.tiff)
     """
     def __init__(self, images_dir, labels_dir, transform=None):
         self.images_dir = Path(images_dir)
         self.labels_dir = Path(labels_dir)
-        self.image_files = sorted([f for f in os.listdir(images_dir) if f.endswith(('.tiff', '.png'))])
+        self.image_files = sorted([f for f in os.listdir(images_dir) if f.endswith('.png')])
 
     def __len__(self):
         return len(self.image_files)
@@ -64,31 +64,52 @@ class SatGenDataset(Dataset):
         return input_tensor, target_tensor
 
 
-def get_dataloaders(train_dir, train_labels_dir, val_dir, val_labels_dir,
-                    batch_size=16, num_workers=4):
+def get_dataloaders(train_root, val_root, batch_size=16, num_workers=4):
     """
     Create train and validation dataloaders.
 
     Args:
-        train_dir: Path to training images
-        train_labels_dir: Path to training labels
-        val_dir: Path to validation images
-        val_labels_dir: Path to validation labels
+        train_root: Root directory for training data (contains subdirs with images/ and gt/)
+        val_root: Root directory for validation data (contains subdirs with images/ and gt/)
         batch_size: Batch size for training
         num_workers: Number of worker processes for data loading
 
     Returns:
         train_loader, val_loader
     """
-    train_dataset = SatGenDataset(
-        images_dir=train_dir,
-        labels_dir=train_labels_dir,
-    )
+    # Collect all images/gt directories from subdirectories
+    train_root = Path(train_root)
+    val_root = Path(val_root)
 
-    val_dataset = SatGenDataset(
-        images_dir=val_dir,
-        labels_dir=val_labels_dir,
-    )
+    train_images = []
+    train_labels = []
+    for subdir in train_root.iterdir():
+        if subdir.is_dir():
+            img_dir = subdir / 'images'
+            gt_dir = subdir / 'gt'
+            if img_dir.exists() and gt_dir.exists():
+                train_images.append(img_dir)
+                train_labels.append(gt_dir)
+
+    val_images = []
+    val_labels = []
+    for subdir in val_root.iterdir():
+        if subdir.is_dir():
+            img_dir = subdir / 'images'
+            gt_dir = subdir / 'gt'
+            if img_dir.exists() and gt_dir.exists():
+                val_images.append(img_dir)
+                val_labels.append(gt_dir)
+
+    # Create combined datasets
+    train_datasets = [SatGenDataset(images_dir=img_dir, labels_dir=gt_dir)
+                     for img_dir, gt_dir in zip(train_images, train_labels)]
+    val_datasets = [SatGenDataset(images_dir=img_dir, labels_dir=gt_dir)
+                   for img_dir, gt_dir in zip(val_images, val_labels)]
+
+    from torch.utils.data import ConcatDataset
+    train_dataset = ConcatDataset(train_datasets)
+    val_dataset = ConcatDataset(val_datasets)
 
     train_loader = torch.utils.data.DataLoader(
         train_dataset,

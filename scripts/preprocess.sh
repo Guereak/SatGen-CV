@@ -17,7 +17,9 @@ python -m src.data.preprocessing \
     --images-subdir images \
     --labels-subdir gt \
     --train-max-white 5.0 \
-    --label-min-white 0.0
+    --label-min-white 0.0 \
+    --test-split-ratio 0.1 \
+    --random-seed 42 \
 
 echo ""
 echo "================================="

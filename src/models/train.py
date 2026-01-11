@@ -56,10 +56,8 @@ class Pix2PixTrainer:
 
         # Data loaders
         self.train_loader, self.val_loader = get_dataloaders(
-            train_dir=config['train_dir'],
-            train_labels_dir=config['train_labels_dir'],
-            val_dir=config['val_dir'],
-            val_labels_dir=config['val_labels_dir'],
+            train_root=config['train_root'],
+            val_root=config['val_root'],
             batch_size=config['batch_size'],
             num_workers=config['num_workers']
         )
@@ -282,10 +280,8 @@ def get_default_config():
         'beta1': 0.5,
         'lambda_l1': 100,
 
-        'train_dir': 'data/processed/filtered_patches_256/train',
-        'train_labels_dir': 'data/processed/sam3_enhanced_patches_256/sam3_predictions',
-        'val_dir': 'data/processed/filtered_patches_256/train',
-        'val_labels_dir': 'data/processed/sam3_enhanced_patches_256/sam3_predictions',
+        'train_root': 'data/processed/train_sam3',
+        'val_root': 'data/processed/test_sam3',
 
         # Logging and checkpoints
         'checkpoint_dir': 'checkpoints',
