@@ -5,11 +5,11 @@ from torch.utils.tensorboard import SummaryWriter
 from pathlib import Path
 import argparse
 from tqdm import tqdm
-import os
 from datetime import datetime
 
 from .generator import Generator
 from .discriminator import Discriminator
+from .losses import PerceptualLoss
 from ..data.dataset import get_dataloaders
 
 
@@ -53,6 +53,19 @@ class Pix2PixTrainer:
         # Loss functions
         self.criterion_GAN = nn.BCEWithLogitsLoss()
         self.criterion_L1 = nn.L1Loss()
+        self.criterion_perceptual = PerceptualLoss().to(self.device)
+
+        # Learning rate schedulers
+        self.scheduler_G = optim.lr_scheduler.CosineAnnealingLR(
+            self.optimizer_G,
+            T_max=config['num_epochs'],
+            eta_min=1e-6
+        )
+        self.scheduler_D = optim.lr_scheduler.CosineAnnealingLR(
+            self.optimizer_D,
+            T_max=config['num_epochs'],
+            eta_min=1e-6
+        )
 
         # Data loaders
         self.train_loader, self.val_loader = get_dataloaders(
@@ -62,15 +75,47 @@ class Pix2PixTrainer:
             num_workers=config['num_workers']
         )
 
+        # Store individual dataset loaders for per-dataset visualization
+        self.val_datasets_individual = self._get_individual_val_loaders(config)
+
         # Setup checkpoint
         self.checkpoint_dir = Path(config['checkpoint_dir'])
         self.checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
         # Setup tensorboard
         self.writer = SummaryWriter(log_dir=config['log_dir'])
+        print(f"\n{'='*60}")
+        print(f"TensorBoard logging to: {config['log_dir']}")
+        print(f"To view: tensorboard --logdir={config['log_dir']}")
+        print(f"{'='*60}\n")
 
         self.current_epoch = 0
         self.global_step = 0
+
+    def _get_individual_val_loaders(self, config):
+        """Create individual dataloaders for each validation dataset."""
+        from ..data.dataset import SatGenDataset
+        from pathlib import Path
+
+        val_root = Path(config['val_root'])
+        individual_loaders = {}
+
+        for subdir in val_root.iterdir():
+            if subdir.is_dir() and not subdir.name.startswith('.'):
+                img_dir = subdir / 'images'
+                gt_dir = subdir / 'gt'
+                if img_dir.exists() and gt_dir.exists():
+                    dataset = SatGenDataset(images_dir=img_dir, labels_dir=gt_dir, augment=False)
+                    loader = torch.utils.data.DataLoader(
+                        dataset,
+                        batch_size=4,  # Get 4 samples per dataset
+                        shuffle=True,
+                        num_workers=0,
+                        pin_memory=True
+                    )
+                    individual_loaders[subdir.name] = loader
+
+        return individual_loaders
 
     def train_epoch(self):
         self.generator.train()
@@ -93,7 +138,7 @@ class Pix2PixTrainer:
             fake_imgs = self.generator(input_imgs)
 
             pred_real = self.discriminator(input_imgs, target_imgs)
-            target_real = torch.ones_like(pred_real)
+            target_real = torch.ones_like(pred_real) * 0.9
             loss_real = self.criterion_GAN(pred_real, target_real)
 
             pred_fake = self.discriminator(input_imgs, fake_imgs.detach())
@@ -113,8 +158,9 @@ class Pix2PixTrainer:
             loss_GAN = self.criterion_GAN(pred_fake, target_real)
 
             loss_L1 = self.criterion_L1(fake_imgs, target_imgs)
+            loss_perceptual = self.criterion_perceptual(fake_imgs, target_imgs)
 
-            loss_G = loss_GAN + self.config['lambda_l1'] * loss_L1
+            loss_G = self.config['lambda_gan'] * loss_GAN + self.config['lambda_l1'] * loss_L1 + self.config['lambda_perceptual'] * loss_perceptual
             loss_G.backward()
             self.optimizer_G.step()
 
@@ -126,7 +172,8 @@ class Pix2PixTrainer:
             pbar.set_postfix({
                 'G_loss': f"{loss_G.item():.4f}",
                 'D_loss': f"{loss_D.item():.4f}",
-                'L1': f"{loss_L1.item():.4f}"
+                'L1': f"{loss_L1.item():.4f}",
+                'Perceptual': f"{loss_perceptual.item():.4f}"
             })
 
             # Tensorboard logs
@@ -135,6 +182,7 @@ class Pix2PixTrainer:
                 self.writer.add_scalar('Train/Discriminator_Loss', loss_D.item(), self.global_step)
                 self.writer.add_scalar('Train/L1_Loss', loss_L1.item(), self.global_step)
                 self.writer.add_scalar('Train/GAN_Loss', loss_GAN.item(), self.global_step)
+                self.writer.add_scalar('Train/Perceptual_Loss', loss_perceptual.item(), self.global_step)
 
             self.global_step += 1
 
@@ -151,6 +199,7 @@ class Pix2PixTrainer:
         total_g_loss = 0
         total_d_loss = 0
         total_l1_loss = 0
+        total_perceptual_loss = 0
 
         for input_imgs, target_imgs in tqdm(self.val_loader, desc="Validating"):
             input_imgs = input_imgs.to(self.device)
@@ -167,39 +216,52 @@ class Pix2PixTrainer:
 
             loss_GAN = self.criterion_GAN(pred_fake, torch.ones_like(pred_fake))
             loss_L1 = self.criterion_L1(fake_imgs, target_imgs)
-            loss_G = loss_GAN + self.config['lambda_l1'] * loss_L1
+            loss_perceptual = self.criterion_perceptual(fake_imgs, target_imgs)
+            loss_G = loss_GAN + self.config['lambda_l1'] * loss_L1 + self.config['lambda_perceptual'] * loss_perceptual
 
             total_g_loss += loss_G.item()
             total_d_loss += loss_D.item()
             total_l1_loss += loss_L1.item()
+            total_perceptual_loss += loss_perceptual.item()
 
         avg_g_loss = total_g_loss / len(self.val_loader)
         avg_d_loss = total_d_loss / len(self.val_loader)
         avg_l1_loss = total_l1_loss / len(self.val_loader)
+        avg_perceptual_loss = total_perceptual_loss / len(self.val_loader)
 
         # Log to tensorboard
         self.writer.add_scalar('Val/Generator_Loss', avg_g_loss, self.current_epoch)
         self.writer.add_scalar('Val/Discriminator_Loss', avg_d_loss, self.current_epoch)
         self.writer.add_scalar('Val/L1_Loss', avg_l1_loss, self.current_epoch)
+        self.writer.add_scalar('Val/Perceptual_Loss', avg_perceptual_loss, self.current_epoch)
 
-        # Log sample images
+        # Log sample images from each dataset separately
         if self.current_epoch % self.config['image_log_interval'] == 0:
-            input_imgs, target_imgs = next(iter(self.val_loader))
-            input_imgs = input_imgs[:4].to(self.device)  # First 4 images
-            target_imgs = target_imgs[:4].to(self.device)
-            fake_imgs = self.generator(input_imgs)
+            print(f"\n  Logging validation images to TensorBoard...")
 
-            # Denormalize images from [-1, 1] to [0, 1]
-            fake_imgs = (fake_imgs + 1) / 2
-            target_imgs = (target_imgs + 1) / 2
-            input_imgs = (input_imgs + 1) / 2
+            for dataset_name, loader in self.val_datasets_individual.items():
+                try:
+                    input_imgs, target_imgs = next(iter(loader))
+                    input_imgs = input_imgs[:4].to(self.device)  # Up to 4 images per dataset
+                    target_imgs = target_imgs[:4].to(self.device)
+                    fake_imgs = self.generator(input_imgs)
 
-            self.writer.add_images('Val/Input_Buildings', input_imgs[:, 0:1, :, :], self.current_epoch)
-            self.writer.add_images('Val/Input_Roads', input_imgs[:, 1:2, :, :], self.current_epoch)
-            self.writer.add_images('Val/Generated', fake_imgs, self.current_epoch)
-            self.writer.add_images('Val/Target', target_imgs, self.current_epoch)
+                    # Denormalize images from [-1, 1] to [0, 1]
+                    fake_imgs = (fake_imgs + 1) / 2
+                    target_imgs = (target_imgs + 1) / 2
+                    input_imgs = (input_imgs + 1) / 2
 
-        return avg_g_loss, avg_d_loss, avg_l1_loss
+                    # Log with dataset-specific tags
+                    self.writer.add_images(f'Val_{dataset_name}/Input_Buildings', input_imgs[:, 0:1, :, :], self.current_epoch)
+                    self.writer.add_images(f'Val_{dataset_name}/Input_Roads', input_imgs[:, 1:2, :, :], self.current_epoch)
+                    self.writer.add_images(f'Val_{dataset_name}/Generated', fake_imgs, self.current_epoch)
+                    self.writer.add_images(f'Val_{dataset_name}/Target', target_imgs, self.current_epoch)
+
+                    print(f"    ✓ Logged 4 samples from {dataset_name}")
+                except Exception as e:
+                    print(f"    ✗ Failed to log images from {dataset_name}: {e}")
+
+        return avg_g_loss, avg_d_loss, avg_l1_loss, avg_perceptual_loss
 
     def save_checkpoint(self, filename='checkpoint.pth'):
         """Save model checkpoint."""
@@ -210,6 +272,8 @@ class Pix2PixTrainer:
             'discriminator_state_dict': self.discriminator.state_dict(),
             'optimizer_G_state_dict': self.optimizer_G.state_dict(),
             'optimizer_D_state_dict': self.optimizer_D.state_dict(),
+            'scheduler_G_state_dict': self.scheduler_G.state_dict(),
+            'scheduler_D_state_dict': self.scheduler_D.state_dict(),
             'config': self.config
         }
         save_path = self.checkpoint_dir / filename
@@ -223,15 +287,36 @@ class Pix2PixTrainer:
         self.discriminator.load_state_dict(checkpoint['discriminator_state_dict'])
         self.optimizer_G.load_state_dict(checkpoint['optimizer_G_state_dict'])
         self.optimizer_D.load_state_dict(checkpoint['optimizer_D_state_dict'])
+
+        # Load scheduler states if available
+        if 'scheduler_G_state_dict' in checkpoint:
+            self.scheduler_G.load_state_dict(checkpoint['scheduler_G_state_dict'])
+        if 'scheduler_D_state_dict' in checkpoint:
+            self.scheduler_D.load_state_dict(checkpoint['scheduler_D_state_dict'])
+
         self.current_epoch = checkpoint['epoch']
         self.global_step = checkpoint['global_step']
         print(f"Checkpoint loaded from {checkpoint_path}")
 
     def train(self):
         """Main training loop."""
-        print(f"Training on device: {self.device}")
+        print(f"\n{'='*60}")
+        print(f"TRAINING CONFIGURATION")
+        print(f"{'='*60}")
+        print(f"Device: {self.device}")
         print(f"Training samples: {len(self.train_loader.dataset)}")
         print(f"Validation samples: {len(self.val_loader.dataset)}")
+
+        # Show per-dataset validation counts
+        if self.val_datasets_individual:
+            print(f"\nValidation datasets:")
+            for dataset_name, loader in self.val_datasets_individual.items():
+                print(f"  - {dataset_name}: {len(loader.dataset)} images")
+
+        print(f"\nBatch size: {self.config['batch_size']}")
+        print(f"Learning rate: G={self.config['lr_generator']}, D={self.config['lr_discriminator']}")
+        print(f"Loss weights: L1={self.config['lambda_l1']}, Perceptual={self.config['lambda_perceptual']}")
+        print(f"{'='*60}\n")
 
         best_val_loss = float('inf')
 
@@ -242,11 +327,20 @@ class Pix2PixTrainer:
             train_g_loss, train_d_loss = self.train_epoch()
 
             # Validate
-            val_g_loss, val_d_loss, val_l1_loss = self.validate()
+            val_g_loss, val_d_loss, val_l1_loss, val_perceptual_loss = self.validate()
+
+            # Step learning rate schedulers
+            self.scheduler_G.step()
+            self.scheduler_D.step()
+
+            # Log learning rates
+            self.writer.add_scalar('LR/Generator', self.optimizer_G.param_groups[0]['lr'], epoch)
+            self.writer.add_scalar('LR/Discriminator', self.optimizer_D.param_groups[0]['lr'], epoch)
 
             print(f"\nEpoch {epoch}/{self.config['num_epochs']-1}")
             print(f"  Train - G: {train_g_loss:.4f}, D: {train_d_loss:.4f}")
-            print(f"  Val   - G: {val_g_loss:.4f}, D: {val_d_loss:.4f}, L1: {val_l1_loss:.4f}")
+            print(f"  Val   - G: {val_g_loss:.4f}, D: {val_d_loss:.4f}, L1: {val_l1_loss:.4f}, Perceptual: {val_perceptual_loss:.4f}")
+            print(f"  LR    - G: {self.optimizer_G.param_groups[0]['lr']:.6f}, D: {self.optimizer_D.param_groups[0]['lr']:.6f}")
 
             # Save checkpoint
             if (epoch + 1) % self.config['save_interval'] == 0:
@@ -278,7 +372,9 @@ def get_default_config():
         'lr_generator': 0.0002,
         'lr_discriminator': 0.0002,
         'beta1': 0.5,
-        'lambda_l1': 100,
+        'lambda_l1': 50,
+        'lambda_perceptual': 0,
+        'lambda_gan': 0.5,
 
         'train_root': 'data/processed/train_sam3',
         'val_root': 'data/processed/test_sam3',
@@ -297,8 +393,8 @@ def get_default_config():
 def main():
     parser = argparse.ArgumentParser(description='Train Pix2Pix model for road generation')
     parser.add_argument('--epochs', type=int, default=200)
-    parser.add_argument('--batch-size', type=int, default=16)
-    parser.add_argument('--lr', type=float, default=0.0002)
+    parser.add_argument('--batch-size', type=int, default=8)
+    parser.add_argument('--lr', type=float, default=0.0003)
     parser.add_argument('--lambda-l1', type=int, default=100)
     parser.add_argument('--checkpoint-dir', type=str, default='checkpoints')
     parser.add_argument('--resume', type=str, default=None)

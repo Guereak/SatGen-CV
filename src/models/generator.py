@@ -5,8 +5,9 @@ class DownBlock(nn.Module):
     def __init__(self, in_channels, out_channels, kernel_size=4, stride=2, padding=1, use_dropout=True):
         super().__init__()
         self.conv = nn.Conv2d(in_channels, out_channels, kernel_size, stride, padding)
-        self.bn = nn.BatchNorm2d(out_channels)
-        self.relu = nn.ReLU(inplace=True)
+        self.bn = nn.InstanceNorm2d(out_channels)
+        # Use LeakyReLU in encoder for better gradient flow and to prevent dying ReLU
+        self.relu = nn.LeakyReLU(0.2, inplace=True)
         self.use_dropout = use_dropout
         self.dropout = nn.Dropout(0.5)
 
@@ -23,7 +24,8 @@ class UpBlock(nn.Module):
     def __init__(self, in_channels, out_channels, kernel_size=4, stride=2, padding=1, use_dropout=True):
         super().__init__()
         self.conv = nn.ConvTranspose2d(in_channels, out_channels, kernel_size, stride, padding)
-        self.bn = nn.BatchNorm2d(out_channels)
+        self.bn = nn.InstanceNorm2d(out_channels)
+        # Keep ReLU in decoder - good for reconstruction, creates sharper features
         self.relu = nn.ReLU(inplace=True)
         self.use_dropout = use_dropout
         self.dropout = nn.Dropout(0.5)
@@ -50,7 +52,7 @@ class Generator(nn.Module):
         super().__init__()
         self.initial_down = nn.Sequential(
             nn.Conv2d(in_channels, features, kernel_size=4, stride=2, padding=1),
-            nn.ReLU(inplace=True)
+            nn.LeakyReLU(0.2, inplace=True)  # LeakyReLU for encoder
         )
 
         self.down1 = DownBlock(features, features*2, use_dropout=False)
@@ -62,7 +64,7 @@ class Generator(nn.Module):
 
         self.bottleneck = nn.Sequential(
             nn.Conv2d(features*8, features*8, kernel_size=4, stride=2, padding=1),
-            nn.ReLU(inplace=True)
+            nn.LeakyReLU(0.2, inplace=True)  # LeakyReLU for bottleneck (encoder end)
         )
 
         self.up1 = UpBlock(features*8, features*8, use_dropout=True)
