@@ -342,6 +342,7 @@ def process_dataset_split(
     train_max_threshold=5.0,
     label_min_threshold=2.0,
     resize_target=None,
+    image_files_subset=None,
 ):
     """
     Process a single split (train/test/val) of a dataset with filtering.
@@ -359,6 +360,7 @@ def process_dataset_split(
         train_max_threshold: Max percentage of white pixels in train image
         label_min_threshold: Min percentage of white pixels in label image
         resize_target: Optional tuple/list [width, height] to resize images before cropping
+        image_files_subset: Optional list of image files to process (for custom splits)
 
     Returns:
         Number of patches saved
@@ -378,8 +380,11 @@ def process_dataset_split(
     output_labels_dir.mkdir(parents=True, exist_ok=True)
 
     # Get all image files
-    extensions = ["*.tif*", "*.png", "*.jpg"]
-    image_files = sorted([f for ext in extensions for f in images_dir.glob(ext)])
+    if image_files_subset is None:
+        extensions = ["*.tif*", "*.png", "*.jpg"]
+        image_files = sorted([f for ext in extensions for f in images_dir.glob(ext)])
+    else:
+        image_files = image_files_subset
 
     total_patches = 0
     saved_patches = 0
@@ -441,10 +446,19 @@ def process_all_datasets(
     images_subdir="images",
     labels_subdir="gt",
     config_path=None,
+    test_split_ratio=0.1,
+    random_seed=42,
 ):
     """
     Process all datasets in the raw data directory.
     Creates organized structure: data/processed/{train,test,val}_patches_256/<dataset_name>/
+
+    For AerialImageDataset, creates a random test split from training data since the test
+    set doesn't have ground truth labels.
+
+    Args:
+        test_split_ratio: Ratio of training data to use for test set (default: 0.1 for 10%)
+        random_seed: Random seed for reproducible splits (default: 42)
     """
     raw_data_path = Path(raw_data_dir)
 
@@ -476,24 +490,98 @@ def process_all_datasets(
         if resize_target:
             print(f"  Will resize to: {resize_target}")
 
-        # Process each split (train, test, val)
-        for split in ["train", "test", "val"]:
-            split_path = dataset_dir / split
-            if split_path.exists():
-                saved = process_dataset_split(
-                    dataset_path=split_path,
-                    split_name=split,
-                    output_base_dir=output_dir,
-                    dataset_name=dataset_name,
-                    images_subdir=images_subdir,
-                    labels_subdir=labels_subdir,
-                    patch_size=patch_size,
-                    overlap=overlap,
-                    train_max_threshold=train_max_threshold,
-                    label_min_threshold=label_min_threshold,
-                    resize_target=resize_target,
-                )
-                total_saved += saved
+        # Special handling for AerialImageDataset: create test split from train data
+        if dataset_name == "AerialImageDataset":
+            train_path = dataset_dir / "train"
+            if train_path.exists():
+                images_dir = train_path / images_subdir
+                if images_dir.exists():
+                    # Get all image files from train split
+                    extensions = ["*.tif*", "*.png", "*.jpg"]
+                    all_train_files = sorted([f for ext in extensions for f in images_dir.glob(ext)])
+
+                    # Randomly split into train and test
+                    np.random.seed(random_seed)
+                    n_test = int(len(all_train_files) * test_split_ratio)
+                    indices = np.random.permutation(len(all_train_files))
+                    test_indices = indices[:n_test]
+                    train_indices = indices[n_test:]
+
+                    train_files = [all_train_files[i] for i in train_indices]
+                    test_files = [all_train_files[i] for i in test_indices]
+
+                    print(f"  Creating random split: {len(train_files)} train, {len(test_files)} test ({test_split_ratio*100:.0f}%)")
+
+                    # Process train split
+                    saved = process_dataset_split(
+                        dataset_path=train_path,
+                        split_name="train",
+                        output_base_dir=output_dir,
+                        dataset_name=dataset_name,
+                        images_subdir=images_subdir,
+                        labels_subdir=labels_subdir,
+                        patch_size=patch_size,
+                        overlap=overlap,
+                        train_max_threshold=train_max_threshold,
+                        label_min_threshold=label_min_threshold,
+                        resize_target=resize_target,
+                        image_files_subset=train_files,
+                    )
+                    total_saved += saved
+
+                    # Process test split (from train data)
+                    saved = process_dataset_split(
+                        dataset_path=train_path,
+                        split_name="test",
+                        output_base_dir=output_dir,
+                        dataset_name=dataset_name,
+                        images_subdir=images_subdir,
+                        labels_subdir=labels_subdir,
+                        patch_size=patch_size,
+                        overlap=overlap,
+                        train_max_threshold=train_max_threshold,
+                        label_min_threshold=label_min_threshold,
+                        resize_target=resize_target,
+                        image_files_subset=test_files,
+                    )
+                    total_saved += saved
+
+                    # Process val split normally if it exists
+                    val_path = dataset_dir / "val"
+                    if val_path.exists():
+                        saved = process_dataset_split(
+                            dataset_path=val_path,
+                            split_name="val",
+                            output_base_dir=output_dir,
+                            dataset_name=dataset_name,
+                            images_subdir=images_subdir,
+                            labels_subdir=labels_subdir,
+                            patch_size=patch_size,
+                            overlap=overlap,
+                            train_max_threshold=train_max_threshold,
+                            label_min_threshold=label_min_threshold,
+                            resize_target=resize_target,
+                        )
+                        total_saved += saved
+        else:
+            # Process other datasets normally
+            for split in ["train", "test", "val"]:
+                split_path = dataset_dir / split
+                if split_path.exists():
+                    saved = process_dataset_split(
+                        dataset_path=split_path,
+                        split_name=split,
+                        output_base_dir=output_dir,
+                        dataset_name=dataset_name,
+                        images_subdir=images_subdir,
+                        labels_subdir=labels_subdir,
+                        patch_size=patch_size,
+                        overlap=overlap,
+                        train_max_threshold=train_max_threshold,
+                        label_min_threshold=label_min_threshold,
+                        resize_target=resize_target,
+                    )
+                    total_saved += saved
 
         print()
 
@@ -520,6 +608,10 @@ if __name__ == "__main__":
                         help="Min percentage of white pixels in label image")
     parser.add_argument("--config", type=str, default=None,
                         help="Path to config.yaml file (auto-detected if not specified)")
+    parser.add_argument("--test-split-ratio", type=float, default=0.1,
+                        help="Ratio of training data to use for test set for AerialImageDataset (default: 0.1)")
+    parser.add_argument("--random-seed", type=int, default=42,
+                        help="Random seed for reproducible train/test splits (default: 42)")
 
     args = parser.parse_args()
 
@@ -533,4 +625,6 @@ if __name__ == "__main__":
         images_subdir=args.images_subdir,
         labels_subdir=args.labels_subdir,
         config_path=args.config,
+        test_split_ratio=args.test_split_ratio,
+        random_seed=args.random_seed,
     )

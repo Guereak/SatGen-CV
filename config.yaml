@@ -10,15 +10,16 @@ model:
 # Training Hyperparameters
 training:
   num_epochs: 200
-  batch_size: 16
+  batch_size: 8
   learning_rate:
-    generator: 0.0002
-    discriminator: 0.0002
+    generator: 0.0003
+    discriminator: 0.0003
   optimizer:
     beta1: 0.5  # Adam beta1 parameter
     beta2: 0.999  # Adam beta2 parameter
   loss:
     lambda_l1: 100  # Weight for L1 reconstruction loss
+    lambda_perceptual: 10  # Weight for VGG perceptual loss
 
 # Data Configuration
 data:

@@ -5,6 +5,8 @@ import torch
 from torch.utils.data import Dataset
 import numpy as np
 import tifffile
+import torchvision.transforms.functional as TF
+import random
 
 
 class SatGenDataset(Dataset):
@@ -16,13 +18,15 @@ class SatGenDataset(Dataset):
     - Target: 3-channel RGB satellite/aerial imagery from train
 
     Args:
-        images_dir: Directory containing RGB satellite images (.tiff)
-        labels_dir: Directory containing segmentation labels (.tif)
+        images_dir: Directory containing RGB satellite images (.png)
+        labels_dir: Directory containing segmentation labels (_processed.tiff)
+        augment: Whether to apply data augmentation (default True)
     """
-    def __init__(self, images_dir, labels_dir, transform=None):
+    def __init__(self, images_dir, labels_dir, transform=None, augment=True):
         self.images_dir = Path(images_dir)
         self.labels_dir = Path(labels_dir)
-        self.image_files = sorted([f for f in os.listdir(images_dir) if f.endswith(('.tiff', '.png'))])
+        self.image_files = sorted([f for f in os.listdir(images_dir) if f.endswith('.png')])
+        self.augment = augment
 
     def __len__(self):
         return len(self.image_files)
@@ -61,34 +65,102 @@ class SatGenDataset(Dataset):
             input_tensor = input_tensor / 255.0
         input_tensor = (input_tensor - 0.5) / 0.5
 
+        # Apply synchronized augmentation transforms
+        if self.augment:
+            input_tensor, target_tensor = self._apply_augmentation(input_tensor, target_tensor)
+
+        return input_tensor, target_tensor
+
+    def _apply_augmentation(self, input_tensor, target_tensor):
+        """
+        Apply synchronized random augmentation to both input and target.
+
+        Args:
+            input_tensor: [2, H, W] segmentation tensor
+            target_tensor: [3, H, W] RGB image tensor
+
+        Returns:
+            Augmented input and target tensors
+        """
+        # Random horizontal flip
+        if random.random() > 0.5:
+            input_tensor = TF.hflip(input_tensor)
+            target_tensor = TF.hflip(target_tensor)
+
+        # Random vertical flip
+        if random.random() > 0.5:
+            input_tensor = TF.vflip(input_tensor)
+            target_tensor = TF.vflip(target_tensor)
+
+        # Random 90-degree rotation (0, 90, 180, 270 degrees)
+        if random.random() > 0.5:
+            angle = random.choice([90, 180, 270])
+            input_tensor = TF.rotate(input_tensor, angle)
+            target_tensor = TF.rotate(target_tensor, angle)
+
+        # Random color jitter on target only (brightness, contrast, saturation)
+        if random.random() > 0.5:
+            brightness_factor = 1.0 + random.uniform(-0.1, 0.1)
+            contrast_factor = 1.0 + random.uniform(-0.1, 0.1)
+            saturation_factor = 1.0 + random.uniform(-0.1, 0.1)
+
+            # Denormalize, apply jitter, renormalize
+            target_tensor = (target_tensor + 1) / 2  # [-1, 1] -> [0, 1]
+            target_tensor = TF.adjust_brightness(target_tensor, brightness_factor)
+            target_tensor = TF.adjust_contrast(target_tensor, contrast_factor)
+            target_tensor = TF.adjust_saturation(target_tensor, saturation_factor)
+            target_tensor = torch.clamp(target_tensor, 0, 1)
+            target_tensor = (target_tensor - 0.5) / 0.5  # [0, 1] -> [-1, 1]
+
         return input_tensor, target_tensor
 
 
-def get_dataloaders(train_dir, train_labels_dir, val_dir, val_labels_dir,
-                    batch_size=16, num_workers=4):
+def get_dataloaders(train_root, val_root, batch_size=16, num_workers=4):
     """
     Create train and validation dataloaders.
 
     Args:
-        train_dir: Path to training images
-        train_labels_dir: Path to training labels
-        val_dir: Path to validation images
-        val_labels_dir: Path to validation labels
+        train_root: Root directory for training data (contains subdirs with images/ and gt/)
+        val_root: Root directory for validation data (contains subdirs with images/ and gt/)
         batch_size: Batch size for training
         num_workers: Number of worker processes for data loading
 
     Returns:
         train_loader, val_loader
     """
-    train_dataset = SatGenDataset(
-        images_dir=train_dir,
-        labels_dir=train_labels_dir,
-    )
+    # Collect all images/gt directories from subdirectories
+    train_root = Path(train_root)
+    val_root = Path(val_root)
 
-    val_dataset = SatGenDataset(
-        images_dir=val_dir,
-        labels_dir=val_labels_dir,
-    )
+    train_images = []
+    train_labels = []
+    for subdir in train_root.iterdir():
+        if subdir.is_dir():
+            img_dir = subdir / 'images'
+            gt_dir = subdir / 'gt'
+            if img_dir.exists() and gt_dir.exists():
+                train_images.append(img_dir)
+                train_labels.append(gt_dir)
+
+    val_images = []
+    val_labels = []
+    for subdir in val_root.iterdir():
+        if subdir.is_dir():
+            img_dir = subdir / 'images'
+            gt_dir = subdir / 'gt'
+            if img_dir.exists() and gt_dir.exists():
+                val_images.append(img_dir)
+                val_labels.append(gt_dir)
+
+    # Create combined datasets (augment train, no augment val)
+    train_datasets = [SatGenDataset(images_dir=img_dir, labels_dir=gt_dir, augment=True)
+                     for img_dir, gt_dir in zip(train_images, train_labels)]
+    val_datasets = [SatGenDataset(images_dir=img_dir, labels_dir=gt_dir, augment=False)
+                   for img_dir, gt_dir in zip(val_images, val_labels)]
+
+    from torch.utils.data import ConcatDataset
+    train_dataset = ConcatDataset(train_datasets)
+    val_dataset = ConcatDataset(val_datasets)
 
     train_loader = torch.utils.data.DataLoader(
         train_dataset,
