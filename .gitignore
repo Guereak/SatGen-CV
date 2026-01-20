@@ -5,6 +5,8 @@ data/examples/evaluate_sam3/*
 runs/
 checkpoints/
 .vscode/
+figures/
+scripts/create_report_figures.py
 
 # More metadata stuff
 .DS_Store

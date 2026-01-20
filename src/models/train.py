@@ -9,8 +9,30 @@ from datetime import datetime
 
 from .generator import Generator
 from .discriminator import Discriminator
-from .losses import PerceptualLoss
+from .losses import MultiLayerPerceptualLoss
 from ..data.dataset import get_dataloaders
+
+
+def add_input_noise(input_tensor: torch.Tensor, noise_std: float = 0.02) -> torch.Tensor:
+    """
+    Add Gaussian noise to input segmentation tensor.
+
+    This improves model robustness and ensures consistency between
+    training and inference when noise injection is used.
+
+    Args:
+        input_tensor: Input tensor in range [-1, 1], shape [B, C, H, W]
+        noise_std: Standard deviation of Gaussian noise (in [-1, 1] scale)
+
+    Returns:
+        Noisy tensor clamped to [-1, 1]
+    """
+    if noise_std <= 0:
+        return input_tensor
+
+    noise = torch.randn_like(input_tensor) * noise_std
+    noisy_tensor = input_tensor + noise
+    return torch.clamp(noisy_tensor, -1, 1)
 
 
 class Pix2PixTrainer:
@@ -53,7 +75,7 @@ class Pix2PixTrainer:
         # Loss functions
         self.criterion_GAN = nn.BCEWithLogitsLoss()
         self.criterion_L1 = nn.L1Loss()
-        self.criterion_perceptual = PerceptualLoss().to(self.device)
+        self.criterion_perceptual = MultiLayerPerceptualLoss().to(self.device)
 
         # Learning rate schedulers
         self.scheduler_G = optim.lr_scheduler.CosineAnnealingLR(
@@ -130,7 +152,10 @@ class Pix2PixTrainer:
             input_imgs = input_imgs.to(self.device)  # [B, 2, 256, 256]
             target_imgs = target_imgs.to(self.device)  # [B, 3, 256, 256]
 
-            # batch_size = input_imgs.size(0)
+            # Add noise to input segmentation for robustness
+            # This ensures consistency with inference-time noise injection
+            if self.config.get('input_noise_std', 0) > 0:
+                input_imgs = add_input_noise(input_imgs, self.config['input_noise_std'])
 
             # Train Discriminator
             self.optimizer_D.zero_grad()
@@ -315,7 +340,8 @@ class Pix2PixTrainer:
 
         print(f"\nBatch size: {self.config['batch_size']}")
         print(f"Learning rate: G={self.config['lr_generator']}, D={self.config['lr_discriminator']}")
-        print(f"Loss weights: L1={self.config['lambda_l1']}, Perceptual={self.config['lambda_perceptual']}")
+        print(f"Loss weights: L1={self.config['lambda_l1']}, Perceptual={self.config['lambda_perceptual']}, GAN={self.config['lambda_gan']}")
+        print(f"Input noise std: {self.config.get('input_noise_std', 0)}")
         print(f"{'='*60}\n")
 
         best_val_loss = float('inf')
@@ -372,9 +398,13 @@ def get_default_config():
         'lr_generator': 0.0002,
         'lr_discriminator': 0.0002,
         'beta1': 0.5,
-        'lambda_l1': 50,
-        'lambda_perceptual': 0,
-        'lambda_gan': 0.5,
+        'lambda_l1': 10,
+        'lambda_perceptual': 50,
+        'lambda_gan': 1.0,
+
+        # Input noise for robustness (std in [-1, 1] normalized space)
+        # 0.02 corresponds to ~5 in [0, 255] space
+        'input_noise_std': 0.02,
 
         'train_root': 'data/processed/train_sam3',
         'val_root': 'data/processed/test_sam3',
@@ -395,9 +425,13 @@ def main():
     parser.add_argument('--epochs', type=int, default=200)
     parser.add_argument('--batch-size', type=int, default=8)
     parser.add_argument('--lr', type=float, default=0.0003)
-    parser.add_argument('--lambda-l1', type=int, default=100)
+    parser.add_argument('--lambda-l1', type=float, default=10)
+    parser.add_argument('--lambda-perceptual', type=float, default=50)
+    parser.add_argument('--lambda-gan', type=float, default=1.0)
     parser.add_argument('--checkpoint-dir', type=str, default='checkpoints')
     parser.add_argument('--resume', type=str, default=None)
+    parser.add_argument('--input-noise-std', type=float, default=0.02,
+                        help='Std of Gaussian noise added to inputs (in [-1,1] space). 0 to disable.')
 
     args = parser.parse_args()
 
@@ -407,7 +441,10 @@ def main():
     config['lr_generator'] = args.lr
     config['lr_discriminator'] = args.lr
     config['lambda_l1'] = args.lambda_l1
+    config['lambda_perceptual'] = args.lambda_perceptual
+    config['lambda_gan'] = args.lambda_gan
     config['checkpoint_dir'] = args.checkpoint_dir
+    config['input_noise_std'] = args.input_noise_std
 
     trainer = Pix2PixTrainer(config)
 
