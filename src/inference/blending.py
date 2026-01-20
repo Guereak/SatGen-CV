@@ -154,7 +154,8 @@ class SeamlessGenerator:
         noise_strategy: Optional[Union[str, NoiseStrategy]] = "gaussian",
         noise_kwargs: Optional[dict] = None,
         empty_threshold: float = 0.01,
-        enable_dropout: bool = True
+        enable_dropout: bool = True,
+        input_noise_std: float = 0.02
     ):
         """
         Initialize SeamlessGenerator with support for noise injection.
@@ -165,13 +166,15 @@ class SeamlessGenerator:
             overlap: Overlap between patches
             blend_mode: Blending mode ("linear" or "cosine")
             device: Device to run model on
-            noise_strategy: Noise strategy for empty patches
+            noise_strategy: Noise strategy for empty patches (legacy, use input_noise_std instead)
                 - String: "gaussian", "sparse", "uniform", "per_channel", "none"
                 - NoiseStrategy instance
                 - None: No noise
             noise_kwargs: Keyword arguments for noise strategy
             empty_threshold: Threshold for considering a patch "empty"
             enable_dropout: Keep dropout enabled during inference (recommended for Pix2Pix)
+            input_noise_std: Std of Gaussian noise added to ALL patches (in [-1,1] space).
+                            Should match training config. Set to 0 to disable.
         """
         self.model = model
         self.patch_size = patch_size
@@ -180,10 +183,11 @@ class SeamlessGenerator:
         self.device = device
         self.empty_threshold = empty_threshold
         self.enable_dropout = enable_dropout
+        self.input_noise_std = input_noise_std
 
         self.weights = create_blend_weights(patch_size, overlap, blend_mode)
 
-        # Setup noise strategy
+        # Setup noise strategy for empty patches (legacy behavior)
         if isinstance(noise_strategy, str):
             noise_kwargs = noise_kwargs or {}
             self.noise_strategy = create_noise_strategy(noise_strategy, **noise_kwargs)
@@ -259,17 +263,22 @@ class SeamlessGenerator:
         Returns:
             Generated patch (H, W, C) in range [0, 255]
         """
-        # Check if patch is empty and apply noise if needed
+        # Legacy: Check if patch is empty and apply noise strategy if needed
         is_empty = is_empty_patch(patch, threshold=self.empty_threshold)
-
         if is_empty and self.noise_strategy is not None:
             patch = self.noise_strategy.add_noise(patch, is_empty=True)
 
-        # Preprocess
+        # Preprocess: convert to tensor in [-1, 1] range
         patch_tensor = torch.from_numpy(patch).permute(2, 0, 1).float()
         patch_tensor = patch_tensor / 255.0
         patch_tensor = (patch_tensor - 0.5) / 0.5
         patch_tensor = patch_tensor.unsqueeze(0).to(self.device)
+
+        # Apply input noise to ALL patches (matches training behavior)
+        # This is applied after normalization to match train.py's add_input_noise()
+        if self.input_noise_std > 0:
+            noise = torch.randn_like(patch_tensor) * self.input_noise_std
+            patch_tensor = torch.clamp(patch_tensor + noise, -1, 1)
 
         # Run model (note: no_grad is used but dropout is still enabled for Pix2Pix)
         with torch.no_grad():
